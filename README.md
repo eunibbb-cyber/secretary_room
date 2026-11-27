@@ -63,6 +63,9 @@
 
 배포 주소: `https://eunibbb-cyber.github.io/secretary_room/`
 
+> `styles.css`·`app.js`를 고치면 `index.html`의 `?v=` 숫자도 함께 올립니다.
+> GitHub Pages가 파일을 10분간 캐시해서, 그대로 두면 새 HTML + 예전 CSS가 섞여 화면이 깨질 수 있습니다.
+
 ## 검증
 
 ```bash
