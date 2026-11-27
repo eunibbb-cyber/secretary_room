@@ -38,6 +38,21 @@
   var TASK_CYCLE = ['wait', 'doing', 'done'];
   var MEMO_TAGS = ['원칙', '종목', '수익화', '기타'];
 
+  /* 오피스 맵 — 3D 이미지 위 % 좌표 (assets/office-map) */
+  var OFFICE_ROOMS = [
+    { key: 'command', label: '지휘실',   emoji: '🎯', x: 46.5, y: 22.5, d: 0 },
+    { key: 'hall',    label: '대회의실', emoji: '🏛️', x: 20,   y: 45.5, d: -1.2 },
+    { key: 'lounge',  label: '라운지',   emoji: '☕', x: 72,   y: 75.5, d: -2.1 },
+    { key: 'tasks',   label: '작업실',   emoji: '📌', x: 15,   y: 69.5, d: -3.0 }
+  ];
+  var OFFICE_STAFF = [
+    { name: '김비서', emoji: '🦝', color: '#C34A3A', x: 47.8, y: 39.5, d: 0 },
+    { name: '김대리', emoji: '🐻', color: '#C97A2B', x: 71.2, y: 40.8, d: -0.9 },
+    { name: '제대리', emoji: '🐰', color: '#3A6EA5', x: 41.5, y: 55.8, d: -1.7 },
+    { name: '클대리', emoji: '🐱', color: '#8659A6', x: 71.4, y: 57.8, d: -2.5 }
+  ];
+  var OFFICE_LIVE_MS = 24 * 60 * 60 * 1000;   // 최근 24시간 안에 보고가 있으면 활동중
+
   /* ---------------- 유틸 ---------------- */
 
   function $(sel, root) { return (root || document).querySelector(sel); }
@@ -431,11 +446,12 @@
       pollSec: 10,
       demoReply: true,
       tts: false,             // 🔊 새 비서 답변 음성 안내 (기본 OFF)
-      voiceAutoSend: false    // 🎤 말이 끝나면 바로 전송 (기본 OFF — 확인 후 전송)
+      voiceAutoSend: false,   // 🎤 말이 끝나면 바로 전송 (기본 OFF — 확인 후 전송)
+      officeMotion: true      // ✨ 오피스 맵 캐릭터·핀 부유 움직임 (기본 ON)
     };
   }
 
-  var DB_VERSION = 2;
+  var DB_VERSION = 3;
 
   function emptyRooms() {
     return { hall: { messages: [] }, command: { messages: [] }, lounge: { messages: [] } };
@@ -448,7 +464,7 @@
       rooms: emptyRooms(),
       tasks: [],
       memos: [],
-      ui: { view: 'meeting', room: 'command', sender: '신회장', taskFilter: 'all' }
+      ui: { view: 'office', room: 'command', sender: '신회장', taskFilter: 'all' }
     };
   }
 
@@ -463,7 +479,7 @@
   /* ---------------- 상태 ---------------- */
 
   var db = loadDB();
-  var currentView = db.ui.view || 'meeting';
+  var currentView = db.ui.view || 'office';
   var currentRoom = ROOMS[db.ui.room] ? db.ui.room : 'command';
   var currentSender = PEOPLE[db.ui.sender] ? db.ui.sender : '신회장';
   var taskFilter = db.ui.taskFilter || 'all';
@@ -510,6 +526,12 @@
       base.tasks = [];
       base.memos = [];
       base.settings.sbLastId = 0;
+    }
+
+    // v2 → v3: 오피스 맵 탭 추가 — 업데이트 직후 첫 화면은 오피스 맵으로.
+    // (이후에는 사용자가 마지막으로 보던 탭을 그대로 기억한다)
+    if (Number(saved.version) === 2) {
+      base.ui.view = 'office';
     }
 
     if (base.settings.backend === 'local' &&
@@ -1244,7 +1266,7 @@
       }
       badge.title = conn.message || '3초마다 새 글을 확인합니다';
       if (conn.state === 'ok') {
-        txt.textContent = '실시간 연결';
+        txt.textContent = '가동 중';
         dot.className = 'dot dot-green';
       } else if (conn.state === 'err') {
         txt.textContent = '연결 끊김';
@@ -1270,7 +1292,7 @@
       return;
     }
     if (conn.state === 'ok') {
-      txt.textContent = s.backend === 'settok' ? '셋톡 연결' : '서버 연결';
+      txt.textContent = '가동 중';
       dot.className = 'dot dot-green';
     } else if (conn.state === 'err') {
       txt.textContent = '연결 끊김';
@@ -1469,6 +1491,233 @@
     }).join('');
   }
 
+  /* ---------------- 오피스 맵 ---------------- */
+
+  function latestMessageOf(name) {
+    var best = null;
+    ROOM_KEYS.forEach(function (k) {
+      (db.rooms[k].messages || []).forEach(function (m) {
+        if (m.who !== name || m.pending || m.failed) return;
+        if (!best || (m.ts || 0) > (best.msg.ts || 0)) best = { msg: m, room: k };
+      });
+    });
+    return best;
+  }
+
+  function tasksOf(name) {
+    var order = { doing: 0, wait: 1, done: 2 };
+    return db.tasks.filter(function (t) { return t.owner === name; }).sort(function (a, b) {
+      var d = (order[a.status] || 0) - (order[b.status] || 0);
+      return d !== 0 ? d : (b.ts || 0) - (a.ts || 0);
+    });
+  }
+
+  function isLive(name) {
+    var l = latestMessageOf(name);
+    return !!(l && (Date.now() - (l.msg.ts || 0)) < OFFICE_LIVE_MS);
+  }
+
+  function buildOfficePins() {
+    var wrap = $('#officePins');
+    if (!wrap || wrap.getAttribute('data-built') === '1') return;
+    var html = '';
+    OFFICE_STAFF.forEach(function (s) {
+      html += '<div class="pin-wrap" style="left:' + s.x + '%;top:' + s.y + '%">' +
+        '<button type="button" class="map-person" data-staff-pin="' + esc(s.name) + '" style="--c:' + esc(s.color) + ';--d:' + s.d + 's" aria-label="' + esc(s.name) + ' 최근 보고 보기">' +
+          '<span class="mp-name">' + esc(s.name) + '</span>' +
+          '<span class="mp-avatar">' + esc(s.emoji) + '<i class="mp-dot" aria-hidden="true"></i></span>' +
+        '</button></div>';
+    });
+    OFFICE_ROOMS.forEach(function (r) {
+      html += '<div class="pin-wrap pin-wrap-room" style="left:' + r.x + '%;top:' + r.y + '%">' +
+        '<button type="button" class="map-pin" data-room-pin="' + esc(r.key) + '" style="--d:' + r.d + 's" aria-label="' + esc(r.label) + ' 보기">' +
+          '<span class="pin-emoji">' + esc(r.emoji) + '</span><span>' + esc(r.label) + '</span>' +
+        '</button></div>';
+    });
+    wrap.innerHTML = html;
+    wrap.setAttribute('data-built', '1');
+  }
+
+  function renderOffice() {
+    var n = OFFICE_STAFF.length;
+    var title = $('#officeHeroTitle');
+    if (title) title.textContent = '신회장님, ' + n + '명 비서가 대기 중이에요';
+
+    var parts = $('#officePartLabel');
+    if (parts) parts.textContent = OFFICE_ROOMS.length + '개 파트 가동';
+
+    var on = $('#officeOnLabel');
+    if (on) {
+      on.textContent = 'ON ' + OFFICE_STAFF[0].name +
+        (n > 1 ? ' 외 ' + (n - 1) + '명' : '');
+    }
+
+    var motion = db.settings.officeMotion !== false;
+    var stage = $('#officeStage');
+    if (stage) stage.classList.toggle('no-motion', !motion);
+    var btn = $('#officeMotion');
+    if (btn) {
+      btn.classList.toggle('is-on', motion);
+      btn.setAttribute('aria-pressed', motion ? 'true' : 'false');
+    }
+    var label = $('#officeMotionLabel');
+    if (label) label.textContent = '움직임 ' + (motion ? 'ON' : 'OFF');
+
+    $$('#officePins .map-person').forEach(function (b) {
+      b.classList.toggle('is-live', isLive(b.getAttribute('data-staff-pin')));
+    });
+  }
+
+  function officeSheetOpen() {
+    var m = $('#officeModal');
+    if (m) m.hidden = false;
+    document.body.style.overflow = 'hidden';
+  }
+
+  function closeOfficeSheet() {
+    var m = $('#officeModal');
+    if (m) m.hidden = true;
+    if ($('#modal').hidden) document.body.style.overflow = '';
+  }
+
+  function osStat(count, label) {
+    return '<div class="os-stat"><b>' + count + '</b><span>' + esc(label) + '</span></div>';
+  }
+
+  function openOfficeStaff(name) {
+    var p = PEOPLE[name] || { role: '비서', emoji: '💬' };
+    var os = null;
+    OFFICE_STAFF.forEach(function (s) { if (s.name === name) os = s; });
+    if (!os) os = { emoji: p.emoji, color: '#B77B33' };
+
+    var latest = latestMessageOf(name);
+    var live = isLive(name);
+    var list = tasksOf(name);
+    var counts = { doing: 0, wait: 0, done: 0 };
+    list.forEach(function (t) { if (counts[t.status] !== undefined) counts[t.status]++; });
+
+    var html = '<div class="os-head">' +
+      '<div class="os-avatar" style="--c:' + esc(os.color) + '">' + esc(os.emoji) + '</div>' +
+      '<div class="os-id">' +
+        '<div class="os-name">' + esc(name) + '<span class="os-role">' + esc(p.role || '비서') + '</span></div>' +
+        '<span class="os-status' + (live ? '' : ' idle') + '">' + (live ? '🟢 활동중' : '대기') + '</span>' +
+      '</div>' +
+    '</div>';
+
+    html += '<div class="os-stats">' + osStat(counts.doing, '진행중') + osStat(counts.wait, '대기') + osStat(counts.done, '완료') + '</div>';
+
+    html += '<div class="os-block"><h3>📣 최근 보고</h3>';
+    if (latest) {
+      var r = ROOMS[latest.room];
+      html += '<div class="os-report">' +
+        '<div class="os-report-meta"><span class="os-room">' + esc(r.emoji + ' ' + r.name) + '</span><span>' + esc(fmtTime(latest.msg.ts || Date.now())) + '</span></div>' +
+        '<p>' + esc(latest.msg.text) + '</p>' +
+      '</div>';
+    } else {
+      html += '<div class="os-empty">아직 올라온 보고가 없어요.<br>지시를 남기면 다음 보고부터 여기에 표시됩니다.</div>';
+    }
+    html += '</div>';
+
+    html += '<div class="os-block"><h3>📋 진행 작업</h3>';
+    if (list.length) {
+      list.slice(0, 3).forEach(function (t) {
+        html += '<div class="os-task">' +
+          '<span class="t' + (t.status === 'done' ? ' done' : '') + '">' + esc(t.title) + '</span>' +
+          '<span class="pill ' + esc(t.status) + '">' + esc(TASK_STATUS[t.status] || t.status) + '</span>' +
+        '</div>';
+      });
+    } else {
+      html += '<div class="os-empty">등록된 작업이 없습니다.</div>';
+    }
+    html += '</div>';
+
+    html += '<div class="os-actions">' +
+      '<button type="button" class="btn btn-ghost btn-sm" data-os="chat" data-staff="' + esc(name) + '" data-room="' + esc(latest ? latest.room : 'command') + '">💬 대화 이어가기</button>' +
+      '<button type="button" class="btn btn-primary btn-sm" data-os="cmd" data-staff="' + esc(name) + '">📌 지시하기</button>' +
+    '</div>';
+
+    var titleEl = $('#officeSheetTitle');
+    if (titleEl) titleEl.textContent = os.emoji + ' ' + name;
+    $('#officeSheetBody').innerHTML = html;
+    officeSheetOpen();
+  }
+
+  function openOfficeRoom(key) {
+    if (key === 'tasks') { openOfficeTasks(); return; }
+    var r = ROOMS[key];
+    if (!r) return;
+
+    var msgs = db.rooms[key].messages.filter(function (m) { return !m.pending && !m.failed; }).slice(-3).reverse();
+
+    var html = '<div class="os-head">' +
+      '<div class="os-avatar" style="--c:#B98432">' + esc(r.emoji) + '</div>' +
+      '<div class="os-id"><div class="os-name">' + esc(r.name) + '</div>' +
+        '<span class="os-status">🟢 ON ' + r.on + '명</span></div>' +
+    '</div>';
+    html += '<p class="os-desc">' + esc(r.desc) + '</p>';
+
+    html += '<div class="os-block"><h3>💬 최근 대화</h3>';
+    if (msgs.length) {
+      msgs.forEach(function (m) {
+        var pp = PEOPLE[m.who] || { emoji: '💬' };
+        html += '<div class="os-msg"><div class="os-msg-meta"><b>' + esc((pp.emoji || '') + ' ' + m.who) + '</b><span>' + esc(fmtTime(m.ts || Date.now())) + '</span></div><p>' + esc(m.text) + '</p></div>';
+      });
+    } else {
+      html += '<div class="os-empty">아직 이 방에 올라온 대화가 없습니다.</div>';
+    }
+    html += '</div>';
+
+    html += '<div class="os-actions">' +
+      '<button type="button" class="btn btn-primary btn-sm" data-os="room" data-room="' + esc(key) + '">🚪 ' + esc(r.name) + ' 들어가기</button>' +
+    '</div>';
+
+    var titleEl = $('#officeSheetTitle');
+    if (titleEl) titleEl.textContent = r.emoji + ' ' + r.name;
+    $('#officeSheetBody').innerHTML = html;
+    officeSheetOpen();
+  }
+
+  function openOfficeTasks() {
+    var counts = { doing: 0, wait: 0, done: 0 };
+    db.tasks.forEach(function (t) { if (counts[t.status] !== undefined) counts[t.status]++; });
+    var active = db.tasks.filter(function (t) { return t.status !== 'done'; })
+      .sort(function (a, b) {
+        var o = { doing: 0, wait: 1 };
+        var d = (o[a.status] || 0) - (o[b.status] || 0);
+        return d !== 0 ? d : (b.ts || 0) - (a.ts || 0);
+      });
+
+    var html = '<div class="os-head">' +
+      '<div class="os-avatar" style="--c:#B98432">📌</div>' +
+      '<div class="os-id"><div class="os-name">작업실</div><span class="os-status">🟢 진행 ' + counts.doing + '건</span></div>' +
+    '</div>';
+    html += '<div class="os-stats">' + osStat(counts.doing, '진행중') + osStat(counts.wait, '대기') + osStat(counts.done, '완료') + '</div>';
+
+    html += '<div class="os-block"><h3>📋 남은 작업</h3>';
+    if (active.length) {
+      active.slice(0, 4).forEach(function (t) {
+        var pp = PEOPLE[t.owner] || { emoji: '💬' };
+        html += '<div class="os-task">' +
+          '<span class="t">' + esc(t.title) + '</span>' +
+          '<span class="task-owner">' + esc(pp.emoji + ' ' + t.owner) + '</span>' +
+          '<span class="pill ' + esc(t.status) + '">' + esc(TASK_STATUS[t.status] || t.status) + '</span>' +
+        '</div>';
+      });
+    } else {
+      html += '<div class="os-empty">대기·진행 중인 작업이 없습니다.</div>';
+    }
+    html += '</div>';
+
+    html += '<div class="os-actions">' +
+      '<button type="button" class="btn btn-primary btn-sm" data-os="tasks">📋 작업실 열기</button>' +
+    '</div>';
+
+    var titleEl = $('#officeSheetTitle');
+    if (titleEl) titleEl.textContent = '📌 작업실';
+    $('#officeSheetBody').innerHTML = html;
+    officeSheetOpen();
+  }
+
   /* ---------------- 메모 ---------------- */
 
   function renderMemos() {
@@ -1552,7 +1801,7 @@
   /* ---------------- 뷰 전환 ---------------- */
 
   function switchView(view) {
-    if (['meeting', 'tasks', 'staff', 'memo'].indexOf(view) < 0) view = 'meeting';
+    if (['office', 'meeting', 'tasks', 'staff', 'memo'].indexOf(view) < 0) view = 'office';
     if (view !== 'meeting' && listening) finishListening(false);
     currentView = view;
     $$('#tabbar .tab').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-view') === view); });
@@ -1563,6 +1812,7 @@
       renderChat(true);
       setTimeout(autoGrow, 20);
     }
+    if (view === 'office') renderOffice();
     save();
   }
 
@@ -1828,6 +2078,7 @@
     renderTasks();
     renderStaff();
     renderMemos();
+    renderOffice();
     renderTtsToggle();
     updateStatus();
     $$('#tabbar .tab').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-view') === currentView); });
@@ -1840,6 +2091,72 @@
     $('#tabbar').addEventListener('click', function (e) {
       var b = e.target.closest('.tab');
       if (b) switchView(b.getAttribute('data-view'));
+    });
+
+    /* 오피스 맵 — 움직임 토글 · 핀 클릭 · 요약 시트 */
+    var motionBtn = $('#officeMotion');
+    if (motionBtn) {
+      motionBtn.addEventListener('click', function () {
+        db.settings.officeMotion = db.settings.officeMotion === false;
+        saveNow();
+        renderOffice();
+        toast(db.settings.officeMotion ? '✨ 캐릭터 움직임을 켰습니다' : '캐릭터 움직임을 멈췄습니다');
+      });
+    }
+
+    var stage = $('#officeStage');
+    if (stage) {
+      stage.addEventListener('click', function (e) {
+        var roomPin = e.target.closest('[data-room-pin]');
+        if (roomPin) { openOfficeRoom(roomPin.getAttribute('data-room-pin')); return; }
+        var staffPin = e.target.closest('[data-staff-pin]');
+        if (staffPin) { openOfficeStaff(staffPin.getAttribute('data-staff-pin')); }
+      });
+    }
+
+    var osClose = $('#officeSheetClose');
+    if (osClose) osClose.addEventListener('click', closeOfficeSheet);
+    var osModal = $('#officeModal');
+    if (osModal) {
+      osModal.addEventListener('click', function (e) {
+        if (e.target === osModal) closeOfficeSheet();
+      });
+    }
+    var osBody = $('#officeSheetBody');
+    if (osBody) {
+      osBody.addEventListener('click', function (e) {
+        var b = e.target.closest('[data-os]');
+        if (!b) return;
+        var act = b.getAttribute('data-os');
+        if (act === 'chat') {
+          var room = b.getAttribute('data-room') || 'command';
+          var who = b.getAttribute('data-staff');
+          closeOfficeSheet();
+          currentSender = '신회장';
+          switchView('meeting');
+          switchRoom(ROOMS[room] ? room : 'command');
+          renderSenderChips();
+          renderChat(true);
+          var input = $('#msgInput');
+          if (input) input.focus();
+          toast(who + '의 최근 대화로 이동했습니다');
+        } else if (act === 'cmd') {
+          var name = b.getAttribute('data-staff');
+          closeOfficeSheet();
+          commandTo(name);
+        } else if (act === 'room') {
+          var rk = b.getAttribute('data-room');
+          closeOfficeSheet();
+          switchView('meeting');
+          switchRoom(ROOMS[rk] ? rk : 'command');
+        } else if (act === 'tasks') {
+          closeOfficeSheet();
+          switchView('tasks');
+        }
+      });
+    }
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && osModal && !osModal.hidden) closeOfficeSheet();
     });
 
     $('#roomTabs').addEventListener('click', function (e) {
@@ -2050,6 +2367,7 @@
 
   function init() {
     bind();
+    buildOfficePins();
     renderAll();
     switchView(currentView);
     switchRoom(currentRoom);
