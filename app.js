@@ -277,10 +277,20 @@
     }
 
     wrap.innerHTML = html;
-    if (scrollBottom !== false) {
-      var sc = $('#chatScroll');
-      if (sc) sc.scrollTop = sc.scrollHeight;
+    if (scrollBottom !== false) stickToBottom();
+  }
+
+  function stickToBottom() {
+    var sc = $('#chatScroll');
+    if (!sc) return;
+    var go = function () { sc.scrollTop = sc.scrollHeight; };
+    go();
+    if (window.requestAnimationFrame) {
+      window.requestAnimationFrame(go);
+      window.requestAnimationFrame(function () { window.requestAnimationFrame(go); });
     }
+    setTimeout(go, 80);
+    setTimeout(go, 220);
   }
 
   function pickResponders(text) {
@@ -1152,6 +1162,12 @@
 
     window.addEventListener('pagehide', saveNow);
     window.addEventListener('beforeunload', saveNow);
+    window.addEventListener('load', function () {
+      if (currentView === 'meeting') stickToBottom();
+    });
+    window.addEventListener('resize', function () {
+      if (currentView === 'meeting') stickToBottom();
+    });
 
     document.addEventListener('visibilitychange', function () {
       if (document.hidden) {
@@ -1170,6 +1186,7 @@
     switchView(currentView);
     switchRoom(currentRoom);
     setTimeout(autoGrow, 30);
+    setTimeout(function () { if (currentView === 'meeting') stickToBottom(); }, 300);
     if (db.settings.backend !== 'local' && (db.settings.settokKey || db.settings.customUrl)) {
       startPolling();
     }
