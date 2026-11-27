@@ -40,16 +40,16 @@
 
   /* 오피스 맵 — 3D 이미지 위 % 좌표 (assets/office-map) */
   var OFFICE_ROOMS = [
-    { key: 'command', label: '지휘실',   emoji: '🎯', x: 46.5, y: 22.5, d: 0 },
-    { key: 'hall',    label: '대회의실', emoji: '🏛️', x: 20,   y: 45.5, d: -1.2 },
-    { key: 'lounge',  label: '라운지',   emoji: '☕', x: 72,   y: 75.5, d: -2.1 },
-    { key: 'tasks',   label: '작업실',   emoji: '📌', x: 15,   y: 69.5, d: -3.0 }
+    { key: 'command', label: '지휘실',   emoji: '🎯', x: 52,   y: 25,   d: 0 },
+    { key: 'hall',    label: '대회의실', emoji: '🏛️', x: 24,   y: 46,   d: -1.2 },
+    { key: 'lounge',  label: '라운지',   emoji: '☕', x: 70,   y: 76,   d: -2.1 },
+    { key: 'tasks',   label: '작업실',   emoji: '📌', x: 17,   y: 71,   d: -3.0 }
   ];
   var OFFICE_STAFF = [
-    { name: '김비서', emoji: '🦝', color: '#C34A3A', x: 47.8, y: 39.5, d: 0 },
-    { name: '김대리', emoji: '🐻', color: '#C97A2B', x: 71.2, y: 40.8, d: -0.9 },
-    { name: '제대리', emoji: '🐰', color: '#3A6EA5', x: 41.5, y: 55.8, d: -1.7 },
-    { name: '클대리', emoji: '🐱', color: '#8659A6', x: 71.4, y: 57.8, d: -2.5 }
+    { name: '김비서', emoji: '🦝', color: '#C34A3A', x: 48.5, y: 40.5, d: 0 },
+    { name: '김대리', emoji: '🐻', color: '#C97A2B', x: 70.8, y: 40.8, d: -0.9 },
+    { name: '제대리', emoji: '🐰', color: '#3A6EA5', x: 41.8, y: 55.8, d: -1.7 },
+    { name: '클대리', emoji: '🐱', color: '#8659A6', x: 68.6, y: 57.2, d: -2.5 }
   ];
   var OFFICE_LIVE_MS = 24 * 60 * 60 * 1000;   // 최근 24시간 안에 보고가 있으면 활동중
 
