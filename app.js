@@ -1,6 +1,7 @@
 /* =========================================================
    👑 신회장 비서실 — app.js
-   순수 바닐라 JS · 빌드 없음 · localStorage 기본 백엔드
+   순수 바닐라 JS · 빌드 없음
+   기본 백엔드: Supabase 실시간(3초 증분 폴링) · 로컬 저장/셋톡/직접 URL 선택 가능
    ========================================================= */
 (function () {
   'use strict';
@@ -9,6 +10,13 @@
 
   var STORE_KEY = 'shin_secretary_room_v1';
   var MAX_MSGS = 300;
+
+  /* Supabase — 브라우저 공개용(publishable) 키. 비밀 키가 아니다. */
+  var SB_DEFAULT_URL = 'https://qrkgbextxzgodywukesd.supabase.co';
+  var SB_DEFAULT_KEY = 'sb_publishable_cfbG03z_wFN7yWMSTAmy0Q_4o9-kiaM';
+  var SB_POLL_MS = 3000;      // 새 글 확인 주기
+  var SB_SLOW_EVERY = 3;      // 3초 폴링 3회에 1회는 작업·메모도 함께 동기화
+  var SB_SEED_TEXT = '👑 신회장 비서실 실시간 서버 연결 완료! 이제 여기서 지시하시면 김비서·제대리·클대리가 실제로 읽고 보고드립니다.';
 
   var ROOMS = {
     hall:    { key: 'hall',    name: '대회의실', emoji: '🏛️', on: 6, desc: '전체 안건 · 공유' },
@@ -115,7 +123,11 @@
 
   function seedSettings() {
     return {
-      backend: 'local',           // local | settok | custom
+      backend: 'supabase',        // supabase | local | settok | custom
+      sbUrl: SB_DEFAULT_URL,
+      sbKey: SB_DEFAULT_KEY,
+      sbLastId: 0,
+      sbSeeded: false,
       settokBase: 'https://chat.gonipro.app',
       settokKey: '',
       settokRoom: 'command',
@@ -126,15 +138,29 @@
     };
   }
 
+  var DB_VERSION = 2;
+
+  function emptyRooms() {
+    return { hall: { messages: [] }, command: { messages: [] }, lounge: { messages: [] } };
+  }
+
   function seedDB() {
     return {
-      version: 1,
+      version: DB_VERSION,
       settings: seedSettings(),
-      rooms: { hall: { messages: seedMessages().hall }, command: { messages: seedMessages().command }, lounge: { messages: seedMessages().lounge } },
-      tasks: seedTasks(),
-      memos: seedMemos(),
+      rooms: emptyRooms(),
+      tasks: [],
+      memos: [],
       ui: { view: 'meeting', room: 'command', sender: '신회장', taskFilter: 'all' }
     };
+  }
+
+  /* 로컬 모드에서만 쓰는 데모 시드 (서버 모드에서는 절대 넣지 않는다) */
+  function fillLocalSeed(target) {
+    var m = seedMessages();
+    ROOM_KEYS.forEach(function (k) { target.rooms[k].messages = m[k]; });
+    target.tasks = seedTasks();
+    target.memos = seedMemos();
   }
 
   /* ---------------- 상태 ---------------- */
@@ -178,6 +204,22 @@
         if (saved.ui[k]) base.ui[k] = saved.ui[k];
       });
     }
+
+    // v1 → v2: 기본 백엔드를 로컬에서 실시간 서버(Supabase)로 옮긴다.
+    // 예전 로컬 데모 데이터는 서버 데이터와 섞이지 않게 비운다.
+    if (!(Number(saved.version) >= 2)) {
+      base.settings.backend = 'supabase';
+      base.rooms = emptyRooms();
+      base.tasks = [];
+      base.memos = [];
+      base.settings.sbLastId = 0;
+    }
+
+    if (base.settings.backend === 'local' &&
+        !base.rooms.command.messages.length && !base.rooms.hall.messages.length &&
+        !base.rooms.lounge.messages.length && !base.tasks.length && !base.memos.length) {
+      fillLocalSeed(base);
+    }
     return base;
   }
 
@@ -207,6 +249,8 @@
       ts: msg.ts || Date.now()
     };
     if (msg.remote) item.remote = true;
+    if (msg.sbId) item.sbId = msg.sbId;
+    if (msg.pending) item.pending = true;
     // 같은 내용을 90초 안에 두 번(내 전송 + 서버 회신) 넣지 않는다
     if (item.remote) {
       var dup = list.some(function (m) {
@@ -258,6 +302,8 @@
       html += '<span class="msg-name">' + esc(m.who) + '</span>';
       if (p.role) html += '<span class="msg-role">' + esc(p.role) + '</span>';
       html += '<span class="msg-time">' + esc(fmtTime(m.ts || Date.now())) + '</span>';
+      if (m.pending) html += '<span class="msg-state">전송 중…</span>';
+      else if (m.failed) html += '<span class="msg-state is-fail">전송 실패</span>';
       html += '</div>';
       html += '<div class="bubble">' + formatText(m.text) + '</div>';
       html += '</div></div>';
@@ -405,12 +451,20 @@
     var text = input.value.trim();
     if (!text) return;
 
-    addMessage(currentRoom, { who: currentSender, text: text });
+    var s = db.settings;
     input.value = '';
     autoGrow();
     input.focus();
 
-    var s = db.settings;
+    if (s.backend === 'supabase') {
+      // 서버 실시간 모드: 진짜 DB에 올리고, 답장은 백그라운드 비서들이 단다.
+      // 데모 자동응답(@all 시뮬레이션)은 절대 돌리지 않는다.
+      sbSend(currentRoom, currentSender, text);
+      return;
+    }
+
+    addMessage(currentRoom, { who: currentSender, text: text });
+
     if (s.backend === 'settok' && s.settokKey) {
       postSettok(text).then(function () {
         setTimeout(pollOnce, 600);
@@ -429,6 +483,302 @@
   function shortErr(err) {
     var m = (err && err.message) || String(err) || '알 수 없는 오류';
     return m.length > 60 ? m.slice(0, 60) + '…' : m;
+  }
+
+  /* =========================================================
+     Supabase 실시간 백엔드
+     - 읽기: GET /rest/v1/{table}  (messages는 id=gt.{lastId} 증분)
+     - 쓰기: POST(upsert) / PATCH / DELETE
+     ========================================================= */
+
+  var sbBusy = false;
+  var sbTick = 0;
+  var sbBooted = false;
+  var lastTasksSig = '';
+  var lastMemosSig = '';
+
+  function sbBase() {
+    return String(db.settings.sbUrl || SB_DEFAULT_URL).replace(/\/+$/, '');
+  }
+  function sbKey() {
+    return String(db.settings.sbKey || '').trim();
+  }
+  function sbReady() {
+    return !!(sbBase() && sbKey());
+  }
+
+  function sbFetch(path, opts) {
+    opts = opts || {};
+    var headers = {
+      apikey: sbKey(),
+      Authorization: 'Bearer ' + sbKey(),
+      Accept: 'application/json'
+    };
+    if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
+    if (opts.prefer) headers.Prefer = opts.prefer;
+
+    return fetch(sbBase() + '/rest/v1/' + path, {
+      method: opts.method || 'GET',
+      headers: headers,
+      body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+      cache: 'no-store'
+    }).then(function (res) {
+      if (!res.ok) {
+        return res.text().then(function (t) {
+          var detail = '';
+          try { detail = (JSON.parse(t).message || '').slice(0, 80); } catch (e) { detail = String(t || '').slice(0, 80); }
+          throw new Error('HTTP ' + res.status + (detail ? ' · ' + detail : ''));
+        });
+      }
+      if (res.status === 204) return null;
+      var ct = res.headers.get('content-type') || '';
+      if (ct.indexOf('json') < 0) return null;
+      return res.json();
+    });
+  }
+
+  /* --- 서버 행 → 앱 항목 --- */
+
+  function msgFromRow(r) {
+    return {
+      id: 'sb-' + r.id,
+      sbId: Number(r.id),
+      who: r.sender || '비서',
+      text: String(r.body == null ? '' : r.body),
+      ts: Date.parse(r.created_at) || Date.now()
+    };
+  }
+  function taskFromRow(r) {
+    return {
+      id: String(r.id),
+      title: r.title || '',
+      owner: r.owner || '김비서',
+      status: TASK_STATUS[r.status] ? r.status : 'wait',
+      ts: Date.parse(r.created_at) || Date.now()
+    };
+  }
+  function memoFromRow(r) {
+    return {
+      id: String(r.id),
+      tag: r.category || '기타',
+      title: r.title || '',
+      body: r.body || '',
+      ts: Date.parse(r.created_at) || Date.now()
+    };
+  }
+
+  /* --- 메시지 병합 (id 중복 제거 + 임시 항목 승격) --- */
+
+  function mergeMessages(rows) {
+    var max = Number(db.settings.sbLastId) || 0;
+    var added = 0;
+
+    (Array.isArray(rows) ? rows : []).forEach(function (r) {
+      var sid = Number(r && r.id);
+      if (!sid) return;
+      if (sid > max) max = sid;
+      var room = ROOMS[r.room] ? r.room : 'command';
+      var list = db.rooms[room].messages;
+      var i;
+      for (i = 0; i < list.length; i++) { if (list[i].sbId === sid) return; }
+
+      var item = msgFromRow(r);
+      var tmp = null;
+      for (i = 0; i < list.length; i++) {
+        var m = list[i];
+        if (m && m.pending && !m.sbId && m.who === item.who && m.text === item.text &&
+            Math.abs((m.ts || 0) - item.ts) < 120000) { tmp = m; break; }
+      }
+      if (tmp) {
+        tmp.id = item.id; tmp.sbId = item.sbId; tmp.ts = item.ts;
+        tmp.pending = false; tmp.failed = false;
+      } else {
+        list.push(item);
+      }
+      list.sort(function (a, b) { return (a.ts || 0) - (b.ts || 0); });
+      if (list.length > MAX_MSGS) list.splice(0, list.length - MAX_MSGS);
+      added++;
+    });
+
+    if (max > (Number(db.settings.sbLastId) || 0)) db.settings.sbLastId = max;
+    return added;
+  }
+
+  function markMessage(id, state) {
+    ROOM_KEYS.forEach(function (k) {
+      db.rooms[k].messages.forEach(function (m) {
+        if (m.id !== id) return;
+        if (state === 'ok') { m.pending = false; m.failed = false; }
+        if (state === 'fail') { m.pending = false; m.failed = true; }
+      });
+    });
+  }
+
+  function nearBottom() {
+    var sc = $('#chatScroll');
+    if (!sc) return true;
+    return (sc.scrollHeight - sc.scrollTop - sc.clientHeight) < 90;
+  }
+
+  function refreshAfterRemote() {
+    save();
+    if (currentView === 'meeting') renderChat(true);
+  }
+
+  function tasksSig() {
+    return JSON.stringify(db.tasks.map(function (t) { return [t.id, t.title, t.owner, t.status]; }));
+  }
+  function memosSig() {
+    return JSON.stringify(db.memos.map(function (m) { return [m.id, m.tag, m.title, m.body]; }));
+  }
+
+  /* --- 전송 --- */
+
+  function sbSend(room, who, text) {
+    var tmpId = 'tmp-' + uid();
+    addMessage(room, { id: tmpId, who: who, text: text, ts: Date.now(), pending: true });
+
+    return sbFetch('messages', {
+      method: 'POST',
+      prefer: 'return=representation',
+      body: { room: room, sender: who, body: text }
+    }).then(function (rows) {
+      var row = Array.isArray(rows) ? rows[0] : rows;
+      if (row && row.id) {
+        markMessage(tmpId, 'ok');
+        db.rooms[room].messages = db.rooms[room].messages.filter(function (m) { return m.id !== tmpId; });
+        mergeMessages([row]);
+      } else {
+        markMessage(tmpId, 'ok');
+      }
+      conn.state = 'ok';
+      conn.message = '';
+      updateStatus();
+      refreshAfterRemote();
+      return true;
+    }).catch(function (err) {
+      markMessage(tmpId, 'fail');
+      conn.state = 'err';
+      conn.message = shortErr(err);
+      updateStatus();
+      refreshAfterRemote();
+      toast('전송 실패 · 서버에 저장하지 못했습니다');
+      return false;
+    });
+  }
+
+  /* --- 읽기 --- */
+
+  var SB_MSG_COLS = 'id,room,sender,body,created_at';
+  var SB_TASK_COLS = 'id,title,owner,status,created_at';
+  var SB_MEMO_COLS = 'id,category,title,body,created_at';
+
+  function sbSeedIfEmpty(rows) {
+    if (Array.isArray(rows) && rows.length) return Promise.resolve(false);
+    if (db.settings.sbSeeded) return Promise.resolve(false);
+    db.settings.sbSeeded = true;
+    saveNow();
+    return sbFetch('messages', {
+      method: 'POST',
+      prefer: 'return=representation',
+      body: { room: 'command', sender: '김비서', body: SB_SEED_TEXT }
+    }).then(function (out) {
+      var row = Array.isArray(out) ? out[0] : out;
+      if (row && row.id) mergeMessages([row]);
+      return true;
+    }).catch(function () {
+      db.settings.sbSeeded = false;
+      return false;
+    });
+  }
+
+  function sbFullSync() {
+    if (!sbReady() || sbBusy) return Promise.resolve();
+    sbBusy = true;
+    conn.state = 'idle';
+    updateStatus();
+
+    return Promise.all([
+      sbFetch('messages?select=' + SB_MSG_COLS + '&order=id.desc&limit=' + MAX_MSGS),
+      sbFetch('tasks?select=' + SB_TASK_COLS + '&order=created_at.asc&limit=200'),
+      sbFetch('memos?select=' + SB_MEMO_COLS + '&order=created_at.asc&limit=200')
+    ]).then(function (res) {
+      var rows = (Array.isArray(res[0]) ? res[0] : []).slice().reverse();
+      db.rooms = emptyRooms();
+      mergeMessages(rows);
+      db.tasks = (Array.isArray(res[1]) ? res[1] : []).map(taskFromRow);
+      db.memos = (Array.isArray(res[2]) ? res[2] : []).map(memoFromRow);
+      lastTasksSig = tasksSig();
+      lastMemosSig = memosSig();
+      conn.state = 'ok';
+      conn.message = '';
+      saveNow();
+      renderChat(true);
+      renderTasks();
+      renderMemos();
+      updateStatus();
+      return sbSeedIfEmpty(rows);
+    }).then(function (seeded) {
+      if (seeded) { saveNow(); renderChat(true); }
+    }).catch(function (err) {
+      conn.state = 'err';
+      conn.message = shortErr(err);
+      updateStatus();
+    }).then(function () {
+      sbBusy = false;
+    });
+  }
+
+  function sbPoll(force) {
+    if (!sbReady() || sbBusy) return Promise.resolve();
+    if (document.hidden && !force) return Promise.resolve();
+    sbBusy = true;
+    sbTick++;
+
+    var slow = force === true || (sbTick % SB_SLOW_EVERY === 0);
+    var since = Number(db.settings.sbLastId) || 0;
+    var atBottom = nearBottom();
+
+    var jobs = [
+      sbFetch('messages?select=' + SB_MSG_COLS + '&id=gt.' + since + '&order=id.asc&limit=200')
+    ];
+    if (slow) {
+      jobs.push(sbFetch('tasks?select=' + SB_TASK_COLS + '&order=created_at.asc&limit=200'));
+      jobs.push(sbFetch('memos?select=' + SB_MEMO_COLS + '&order=created_at.asc&limit=200'));
+    }
+
+    return Promise.all(jobs).then(function (res) {
+      var added = mergeMessages(res[0]);
+
+      if (slow) {
+        db.tasks = (Array.isArray(res[1]) ? res[1] : []).map(taskFromRow);
+        db.memos = (Array.isArray(res[2]) ? res[2] : []).map(memoFromRow);
+
+        var ts = tasksSig();
+        if (ts !== lastTasksSig) { lastTasksSig = ts; renderTasks(); }
+        var ms = memosSig();
+        if (ms !== lastMemosSig) { lastMemosSig = ms; renderMemos(); }
+      }
+
+      conn.state = 'ok';
+      conn.message = '';
+      save();
+      if (added && currentView === 'meeting') renderChat(atBottom);
+      updateStatus();
+    }).catch(function (err) {
+      conn.state = 'err';
+      conn.message = shortErr(err);
+      updateStatus();
+    }).then(function () {
+      sbBusy = false;
+    });
+  }
+
+  function sbStart() {
+    if (db.settings.backend !== 'supabase') return;
+    if (!sbReady()) { conn.state = 'idle'; updateStatus(); return; }
+    if (!sbBooted) { sbBooted = true; sbFullSync(); }
+    else sbPoll(true);
   }
 
   /* ---------------- 셋톡 / 커스텀 백엔드 ---------------- */
@@ -550,7 +900,11 @@
   function startPolling() {
     stopPolling();
     var s = db.settings;
-    if (s.backend === 'settok' && s.settokKey) {
+    if (s.backend === 'supabase') {
+      conn.state = 'idle'; updateStatus();
+      sbStart();
+      pollTimer = setInterval(function () { sbPoll(false); }, SB_POLL_MS);
+    } else if (s.backend === 'settok' && s.settokKey) {
       conn.state = 'idle'; updateStatus();
       pollOnce();
       pollTimer = setInterval(pollOnce, Math.max(5, Number(s.pollSec) || 10) * 1000);
@@ -576,8 +930,32 @@
 
     var s = db.settings;
     if (s.backend === 'local') {
-      txt.textContent = '실시간 연결';
+      txt.textContent = '로컬 모드';
       dot.className = 'dot dot-green';
+      badge.title = '이 기기에만 저장 중';
+      return;
+    }
+    if (s.backend === 'supabase') {
+      if (!sbReady()) {
+        txt.textContent = '설정 필요';
+        dot.className = 'dot dot-amber';
+        badge.classList.add('is-warn');
+        badge.title = '⋯ 설정에서 Supabase URL·Key를 입력하세요';
+        return;
+      }
+      badge.title = conn.message || '3초마다 새 글을 확인합니다';
+      if (conn.state === 'ok') {
+        txt.textContent = '실시간 연결';
+        dot.className = 'dot dot-green';
+      } else if (conn.state === 'err') {
+        txt.textContent = '연결 끊김';
+        dot.className = 'dot dot-red';
+        badge.classList.add('is-err');
+      } else {
+        txt.textContent = '연결 중';
+        dot.className = 'dot dot-amber';
+        badge.classList.add('is-warn');
+      }
       return;
     }
     if (s.backend === 'settok' && !s.settokKey) {
@@ -696,9 +1074,70 @@
   }
 
   function addTask(title, owner, status) {
-    db.tasks.push({ id: uid(), title: title, owner: owner, status: status, ts: Date.now() });
+    var task = { id: uid(), title: title, owner: owner, status: status, ts: Date.now() };
+    db.tasks.push(task);
     save();
     renderTasks();
+    lastTasksSig = tasksSig();
+
+    if (db.settings.backend === 'supabase') {
+      sbFetch('tasks', {
+        method: 'POST',
+        prefer: 'return=representation,resolution=merge-duplicates',
+        body: { id: task.id, title: task.title, owner: task.owner, status: task.status }
+      }).then(function () {
+        conn.state = 'ok';
+        updateStatus();
+      }).catch(function (err) {
+        db.tasks = db.tasks.filter(function (t) { return t.id !== task.id; });
+        save();
+        renderTasks();
+        conn.state = 'err';
+        updateStatus();
+        toast('작업 저장 실패 · ' + shortErr(err));
+      });
+    }
+  }
+
+  function updateTaskStatus(task, status) {
+    task.status = status;
+    save();
+    renderTasks();
+    lastTasksSig = tasksSig();
+
+    if (db.settings.backend !== 'supabase') return;
+    sbFetch('tasks?id=eq.' + encodeURIComponent(task.id), {
+      method: 'PATCH',
+      prefer: 'return=minimal',
+      body: { status: status }
+    }).then(function () {
+      conn.state = 'ok';
+      updateStatus();
+    }).catch(function (err) {
+      conn.state = 'err';
+      updateStatus();
+      toast('작업 상태 저장 실패 · ' + shortErr(err));
+    });
+  }
+
+  function deleteTask(task) {
+    db.tasks = db.tasks.filter(function (t) { return t.id !== task.id; });
+    save();
+    renderTasks();
+    lastTasksSig = tasksSig();
+
+    if (db.settings.backend !== 'supabase') return;
+    sbFetch('tasks?id=eq.' + encodeURIComponent(task.id), {
+      method: 'DELETE',
+      prefer: 'return=minimal'
+    }).then(function () {
+      conn.state = 'ok';
+      updateStatus();
+    }).catch(function (err) {
+      conn.state = 'err';
+      updateStatus();
+      toast('작업 삭제 실패 · ' + shortErr(err));
+    });
   }
 
   /* ---------------- 비서현황 ---------------- */
@@ -776,6 +1215,37 @@
     $('#memoSubmit').textContent = '저장';
   }
 
+  function sbSaveMemo(memo) {
+    if (db.settings.backend !== 'supabase') return;
+    sbFetch('memos', {
+      method: 'POST',
+      prefer: 'return=representation,resolution=merge-duplicates',
+      body: { id: memo.id, category: memo.tag, title: memo.title, body: memo.body }
+    }).then(function () {
+      conn.state = 'ok';
+      updateStatus();
+    }).catch(function (err) {
+      conn.state = 'err';
+      updateStatus();
+      toast('메모 저장 실패 · ' + shortErr(err));
+    });
+  }
+
+  function sbDeleteMemo(id) {
+    if (db.settings.backend !== 'supabase') return;
+    sbFetch('memos?id=eq.' + encodeURIComponent(id), {
+      method: 'DELETE',
+      prefer: 'return=minimal'
+    }).then(function () {
+      conn.state = 'ok';
+      updateStatus();
+    }).catch(function (err) {
+      conn.state = 'err';
+      updateStatus();
+      toast('메모 삭제 실패 · ' + shortErr(err));
+    });
+  }
+
   /* ---------------- 뷰 전환 ---------------- */
 
   function switchView(view) {
@@ -804,6 +1274,8 @@
 
   function openSheet() {
     var s = db.settings;
+    $('#sbUrl').value = s.sbUrl || SB_DEFAULT_URL;
+    $('#sbKey').value = s.sbKey || SB_DEFAULT_KEY;
     $('#settokBase').value = s.settokBase || 'https://chat.gonipro.app';
     $('#settokKey').value = s.settokKey || '';
     $('#settokRoom').value = ROOMS[s.settokRoom] ? s.settokRoom : 'command';
@@ -825,16 +1297,18 @@
   }
 
   var HINTS = {
-    local: '이 기기 브라우저(localStorage)에만 저장하고 바로 동작합니다. 서버 없이도 완벽하게 쓸 수 있어요.',
+    supabase: '실시간 서버(Supabase)와 연결합니다. 새 글을 3초마다 확인하고, 화면으로 돌아오면 바로 동기화합니다.',
+    local: '이 기기 브라우저(localStorage)에만 저장합니다. 서버 없이도 동작하지만 비서들이 읽을 수 없습니다.',
     settok: '셋톡(chat.gonipro.app) 방과 직접 연결합니다. 열쇠는 이 브라우저에만 저장됩니다.',
     custom: '직접 만든 백엔드(프록시)와 연결합니다. 간단한 REST 규격만 맞추면 됩니다.'
   };
 
   function setBackendSeg(backend) {
-    if (['local', 'settok', 'custom'].indexOf(backend) < 0) backend = 'local';
+    if (['supabase', 'local', 'settok', 'custom'].indexOf(backend) < 0) backend = 'supabase';
     $$('#backendSeg button').forEach(function (b) {
       b.classList.toggle('active', b.getAttribute('data-backend') === backend);
     });
+    $('#panelSupabase').hidden = backend !== 'supabase';
     $('#panelSettok').hidden = backend !== 'settok';
     $('#panelCustom').hidden = backend !== 'custom';
     $('#backendHint').textContent = HINTS[backend];
@@ -842,12 +1316,14 @@
   }
 
   function selectedBackend() {
-    return $('#backendSeg').getAttribute('data-value') || 'local';
+    return $('#backendSeg').getAttribute('data-value') || 'supabase';
   }
 
   function readFormSettings() {
     return {
       backend: selectedBackend(),
+      sbUrl: $('#sbUrl').value.trim().replace(/\/+$/, '') || SB_DEFAULT_URL,
+      sbKey: $('#sbKey').value.trim(),
       settokBase: $('#settokBase').value.trim() || 'https://chat.gonipro.app',
       settokKey: $('#settokKey').value.trim(),
       settokRoom: $('#settokRoom').value || 'command',
@@ -869,6 +1345,30 @@
     showConnResult(true, '확인 중…');
     if (f.backend === 'local') {
       showConnResult(true, '로컬 모드 — 저장소 정상. 바로 사용할 수 있습니다.');
+      return;
+    }
+    if (f.backend === 'supabase') {
+      if (!f.sbKey) { showConnResult(false, 'Publishable Key를 먼저 입력해 주세요.'); return; }
+      var probe = function (path) {
+        return fetch(f.sbUrl + '/rest/v1/' + path, {
+          headers: { apikey: f.sbKey, Authorization: 'Bearer ' + f.sbKey, Accept: 'application/json', Prefer: 'count=exact' },
+          cache: 'no-store'
+        });
+      };
+      Promise.all([probe('messages?select=id&limit=1'), probe('tasks?select=id&limit=1'), probe('memos?select=id&limit=1')])
+        .then(function (rs) {
+          var bad = rs.filter(function (r) { return !r.ok; })[0];
+          if (bad) throw new Error('HTTP ' + bad.status);
+          var counts = rs.map(function (r) {
+            var cr = r.headers.get('content-range') || '';
+            var m = cr.match(/\/(\d+)$/);
+            return m ? m[1] : '?';
+          });
+          showConnResult(true, '연결 성공 · 메시지 ' + counts[0] + ' · 작업 ' + counts[1] + ' · 메모 ' + counts[2] + '건');
+        })
+        .catch(function (e) {
+          showConnResult(false, '연결 실패 · ' + shortErr(e) + '\nURL·Key를 확인해 주세요.');
+        });
       return;
     }
     if (f.backend === 'settok') {
@@ -897,7 +1397,10 @@
 
   function saveSettings() {
     var f = readFormSettings();
+    var prev = db.settings.backend;
     db.settings.backend = f.backend;
+    db.settings.sbUrl = f.sbUrl;
+    db.settings.sbKey = f.sbKey;
     db.settings.settokBase = f.settokBase;
     db.settings.settokKey = f.settokKey;
     db.settings.settokRoom = f.settokRoom;
@@ -905,11 +1408,27 @@
     db.settings.customUrl = f.customUrl;
     db.settings.demoReply = f.demoReply;
     db.settings.sinceId = 0;
+
+    if (prev !== f.backend) {
+      // 백엔드가 바뀌면 캐시를 그 백엔드 기준으로 다시 구성한다.
+      db.rooms = emptyRooms();
+      db.tasks = [];
+      db.memos = [];
+      db.settings.sbLastId = 0;
+      db.settings.sbSeeded = false;
+      sbBooted = false;
+      lastTasksSig = '';
+      lastMemosSig = '';
+      if (f.backend === 'local') fillLocalSeed(db);
+    }
     saveNow();
+    renderAll();
     startPolling();
+    switchView(currentView);
     closeSheet();
 
-    if (f.backend === 'local') toast('로컬 모드로 저장했습니다');
+    if (f.backend === 'supabase') toast(f.sbKey ? '실시간 서버 연결을 시작합니다' : 'Key를 입력하면 연결됩니다');
+    else if (f.backend === 'local') toast('로컬 모드로 저장했습니다');
     else if (f.backend === 'settok') toast(f.settokKey ? '셋톡 연결을 시작합니다' : '열쇠를 입력하면 연결됩니다');
     else toast(f.customUrl ? '백엔드 연결을 시작합니다' : 'URL을 입력하면 연결됩니다');
   }
@@ -933,7 +1452,11 @@
   }
 
   function resetAll() {
-    if (!window.confirm('회의실 대화·작업·메모를 모두 지우고 처음 상태로 돌아갑니다. 계속할까요?')) return;
+    var server = db.settings.backend === 'supabase';
+    var ask = server
+      ? '이 기기에 쌓인 화면 캐시를 비우고 서버에서 다시 불러옵니다. 서버의 대화·작업·메모는 지워지지 않습니다. 계속할까요?'
+      : '회의실 대화·작업·메모를 모두 지우고 처음 상태로 돌아갑니다. 계속할까요?';
+    if (!window.confirm(ask)) return;
     try { localStorage.removeItem(STORE_KEY); } catch (e) {}
     stopPolling();
     db = seedDB();
@@ -943,9 +1466,13 @@
     taskFilter = 'all';
     typingState = { hall: [], command: [], lounge: [] };
     conn = { state: 'idle', message: '' };
+    sbBooted = false;
+    lastTasksSig = '';
+    lastMemosSig = '';
     renderAll();
     switchView('meeting');
     switchRoom('command');
+    startPolling();
     closeSheet();
     toast('처음 상태로 되돌렸습니다');
   }
@@ -1077,16 +1604,15 @@
       if (!task) return;
       var kind = act.getAttribute('data-act');
       if (kind === 'toggle') {
-        task.status = task.status === 'done' ? 'doing' : 'done';
+        updateTaskStatus(task, task.status === 'done' ? 'doing' : 'done');
       } else if (kind === 'status') {
         var i = TASK_CYCLE.indexOf(task.status);
-        task.status = TASK_CYCLE[(i + 1) % TASK_CYCLE.length];
+        updateTaskStatus(task, TASK_CYCLE[(i + 1) % TASK_CYCLE.length]);
       } else if (kind === 'del') {
         if (!window.confirm('이 작업을 지울까요?')) return;
-        db.tasks = db.tasks.filter(function (t) { return t.id !== id; });
+        deleteTask(task);
       }
-      save();
-      renderTasks();
+      return;
     });
 
     $('#staffList').addEventListener('click', function (e) {
@@ -1109,15 +1635,20 @@
       if (!title) { toast('제목을 입력해 주세요'); return; }
       if (!body) { toast('내용을 입력해 주세요'); return; }
       if (editingMemoId) {
+        var edited = null;
         db.memos.forEach(function (m) {
-          if (m.id === editingMemoId) { m.title = title; m.body = body; m.tag = tag; m.ts = Date.now(); }
+          if (m.id === editingMemoId) { m.title = title; m.body = body; m.tag = tag; edited = m; }
         });
+        if (edited) sbSaveMemo(edited);
         toast('메모를 수정했습니다');
       } else {
-        db.memos.push({ id: uid(), tag: tag, title: title, body: body, ts: Date.now() });
+        var memo = { id: uid(), tag: tag, title: title, body: body, ts: Date.now() };
+        db.memos.push(memo);
+        sbSaveMemo(memo);
         toast('메모를 저장했습니다');
       }
       save();
+      lastMemosSig = memosSig();
       closeMemoForm();
       renderMemos();
     });
@@ -1135,7 +1666,9 @@
       } else if (act.getAttribute('data-act') === 'del') {
         if (!window.confirm('이 메모를 지울까요?')) return;
         db.memos = db.memos.filter(function (m) { return m.id !== id; });
+        sbDeleteMemo(id);
         save();
+        lastMemosSig = memosSig();
         renderMemos();
         toast('메모를 지웠습니다');
       }
@@ -1173,12 +1706,26 @@
       if (document.hidden) {
         stopPolling();
       } else {
-        startPolling();
+        resumeSync();
       }
     });
+    window.addEventListener('focus', function () {
+      if (!document.hidden) resumeSync();
+    });
+    window.addEventListener('online', resumeSync);
   }
 
   /* ---------------- 시작 ---------------- */
+
+  function resumeSync() {
+    if (db.settings.backend !== 'supabase') {
+      if (!pollTimer) startPolling();
+      return;
+    }
+    if (!sbReady()) { updateStatus(); return; }
+    if (!pollTimer) startPolling();
+    sbPoll(true);
+  }
 
   function init() {
     bind();
@@ -1187,9 +1734,7 @@
     switchRoom(currentRoom);
     setTimeout(autoGrow, 30);
     setTimeout(function () { if (currentView === 'meeting') stickToBottom(); }, 300);
-    if (db.settings.backend !== 'local' && (db.settings.settokKey || db.settings.customUrl)) {
-      startPolling();
-    }
+    startPolling();
     saveNow();
   }
 

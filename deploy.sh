@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # 👑 신회장 비서실 — GitHub Pages 배포 스크립트
 # 저장소가 먼저 있어야 합니다 (GitHub 웹에서 빈 public 저장소 생성).
-#   사용법: ./deploy.sh            (기본 eunibbb-cyber/secretary-room)
+#   사용법: ./deploy.sh            (기본 eunibbb-cyber/secretary_room)
 #           OWNER=... REPO=... ./deploy.sh
 set -euo pipefail
 
 OWNER="${OWNER:-eunibbb-cyber}"
-REPO="${REPO:-secretary-room}"
+REPO="${REPO:-secretary_room}"
 BRANCH="main"
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR"

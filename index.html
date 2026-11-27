@@ -176,12 +176,26 @@
 
     <div class="field">
       <label>백엔드</label>
-      <div class="segmented" id="backendSeg">
-        <button type="button" data-backend="local" class="active">로컬 저장</button>
-        <button type="button" data-backend="settok">셋톡 API</button>
-        <button type="button" data-backend="custom">직접 URL</button>
+      <div class="segmented" id="backendSeg" data-value="supabase">
+        <button type="button" data-backend="supabase" class="active">🟢 실시간 서버</button>
+        <button type="button" data-backend="local">💾 로컬 저장</button>
+        <button type="button" data-backend="settok">🔑 셋톡 API</button>
+        <button type="button" data-backend="custom">🔗 직접 URL</button>
       </div>
-      <p class="hint" id="backendHint">이 기기 브라우저(localStorage)에만 저장하고 바로 동작합니다.</p>
+      <p class="hint" id="backendHint">실시간 서버(Supabase)와 연결합니다. 새 글을 3초마다 확인하고, 화면으로 돌아오면 바로 동기화합니다.</p>
+    </div>
+
+    <div class="backend-panel" id="panelSupabase">
+      <div class="field">
+        <label for="sbUrl">Project URL</label>
+        <input id="sbUrl" type="url" placeholder="https://xxxx.supabase.co" autocomplete="off" spellcheck="false" inputmode="url">
+      </div>
+      <div class="field">
+        <label for="sbKey">Publishable Key</label>
+        <input id="sbKey" type="text" placeholder="sb_publishable_..." autocomplete="off" spellcheck="false">
+        <p class="hint">브라우저 공개용 키입니다(비밀 키 아님). 이 키로 <code>messages</code>·<code>tasks</code>·<code>memos</code>를 읽고 씁니다.</p>
+      </div>
+      <p class="hint">앱을 열면 서버에서 대화·작업·메모를 불러오고, 새 글은 3초마다 확인합니다. 끊기면 상단에 <b>연결 끊김</b>만 표시합니다.</p>
     </div>
 
     <div class="backend-panel" id="panelSettok" hidden>
@@ -223,7 +237,8 @@
     <div class="switch-row">
       <div>
         <strong>데모 자동응답</strong>
-        <p class="hint">로컬 모드에서 비서들이 지시에 답하는 시늉을 합니다.</p>
+        <p class="hint">로컬 모드에서만 쓰입니다. 실시간 서버 모드에서는 켜져 있어도
+        동작하지 않고, 실제 비서들이 서버에 답장을 답니다.</p>
       </div>
       <label class="switch"><input type="checkbox" id="demoReply" checked><span></span></label>
     </div>

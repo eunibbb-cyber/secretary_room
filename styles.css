@@ -304,6 +304,8 @@ button{cursor:pointer;-webkit-tap-highlight-color:transparent}
 .msg-name{font-size:11.5px;font-weight:800;color:var(--brown);letter-spacing:-.2px}
 .msg-role{font-size:10px;font-weight:600;color:var(--muted-2)}
 .msg-time{font-size:9.5px;font-weight:600;color:#C0AF97}
+.msg-state{font-size:9px;font-weight:700;color:#B09561}
+.msg-state.is-fail{color:#B4483A}
 .bubble{
   position:relative;
   padding:10px 13px;
@@ -691,7 +693,7 @@ button{cursor:pointer;-webkit-tap-highlight-color:transparent}
 .sheet-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
 .sheet-head h2{margin:0;font-size:15px;font-weight:800;color:var(--brown-deep);letter-spacing:-.3px}
 .segmented{
-  display:grid;grid-template-columns:repeat(3,1fr);
+  display:grid;grid-template-columns:repeat(2,1fr);
   gap:4px;
   padding:4px;
   background:#F4ECDD;
