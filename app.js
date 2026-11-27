@@ -77,6 +77,301 @@
     toastTimer = setTimeout(function () { el.classList.remove('show'); }, 2200);
   }
 
+  /* =========================================================
+     음성 — 🎤 말로 지시하기(STT) · 🔊 답변 읽기(TTS)
+     ========================================================= */
+
+  var SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition || null;
+  var TTS_OK = !!(window.speechSynthesis && window.SpeechSynthesisUtterance);
+
+  var rec = null;           // 진행 중인 인식 세션
+  var listening = false;
+  var recBase = '';         // 인식 시작 전 입력창 내용
+  var recFinal = '';
+  var recInterim = '';
+  var recStopWanted = false;
+  var recRestarts = 0;
+  var recAutoSent = false;
+  var REC_MAX_RESTARTS = 3;
+
+  function setInputValue(v) {
+    var el = $('#msgInput');
+    if (!el) return;
+    el.value = v;
+    autoGrow();
+  }
+
+  function micUi(on) {
+    var btn = $('#micBtn');
+    var bar = $('#voiceBar');
+    if (btn) {
+      btn.classList.toggle('is-on', !!on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      btn.setAttribute('aria-label', on ? '음성 입력 중지' : '음성으로 말하기');
+      btn.title = on ? '음성 입력 중지' : '음성 입력';
+    }
+    if (bar) bar.hidden = !on;
+    var auto = $('#voiceAutoSend');
+    if (auto) auto.checked = !!db.settings.voiceAutoSend;
+    var txt = $('#voiceText');
+    if (txt && on) txt.textContent = '듣고 있어요…';
+  }
+
+  function onSpeechResult(e) {
+    var fin = '';
+    var itm = '';
+    for (var i = 0; i < e.results.length; i++) {
+      var r = e.results[i];
+      var t = (r && r[0] && r[0].transcript) || '';
+      if (r && r.isFinal) fin += t;
+      else itm += t;
+    }
+    recFinal = fin;
+    recInterim = itm;
+    var line = (recFinal + recInterim).replace(/^\s+/, '');
+    var val = (recBase + line).replace(/\s+$/, '');
+    setInputValue(val);
+  }
+
+  function onSpeechError(e) {
+    var err = (e && e.error) || '';
+    recStopWanted = true;
+    listening = false;
+    var r = rec;
+    rec = null;
+    if (r) {
+      try { r.onresult = r.onend = r.onerror = null; r.abort(); } catch (e2) {}
+    }
+    micUi(false);
+    if (err === 'not-allowed' || err === 'service-not-allowed') {
+      toast('마이크 사용을 허용해 주세요 (주소창 → 마이크 허용)');
+    } else if (err === 'no-speech') {
+      toast('말씀이 들리지 않았어요. 다시 눌러 주세요');
+    } else if (err === 'audio-capture') {
+      toast('마이크를 찾지 못했습니다. 기기 마이크를 확인해 주세요');
+    } else if (err === 'network') {
+      toast('음성 인식 서버에 연결하지 못했습니다. 잠시 뒤 다시 시도해 주세요');
+    } else if (err !== 'aborted') {
+      toast('음성 인식 오류 · ' + err);
+    }
+  }
+
+  function finishListening(allowSend) {
+    listening = false;
+    recStopWanted = true;
+    var r = rec;
+    rec = null;
+    if (r) {
+      try { r.onresult = r.onend = r.onerror = null; r.stop(); } catch (e) {}
+    }
+    micUi(false);
+
+    var el = $('#msgInput');
+    var text = el ? el.value.trim() : '';
+    if (!text) return;
+    if (allowSend !== false && db.settings.voiceAutoSend && !recAutoSent) {
+      recAutoSent = true;
+      toast('말이 끝나 바로 전송합니다');
+      setTimeout(handleSend, 160);
+    } else {
+      toast('음성 인식 완료 · 확인하고 보내세요');
+    }
+  }
+
+  function onSpeechEnd() {
+    if (recStopWanted) return;
+    // continuous 모드에서도 브라우저가 먼저 끊는 경우가 있어, 사용자가 멈추기 전이면 이어 붙인다.
+    if (listening && rec && recRestarts < REC_MAX_RESTARTS) {
+      recRestarts++;
+      try { rec.start(); return; } catch (e) {}
+    }
+    finishListening();
+  }
+
+  function startListening() {
+    if (!SpeechRec) {
+      toast('이 브라우저는 음성 인식을 지원하지 않아 키보드 마이크를 이용해 주세요');
+      return;
+    }
+    if (listening) { stopListening(); return; }
+
+    var inp = $('#msgInput');
+    recBase = (inp && inp.value.trim()) ? inp.value.replace(/\s+$/, '') + ' ' : '';
+    recFinal = '';
+    recInterim = '';
+    recStopWanted = false;
+    recRestarts = 0;
+    recAutoSent = false;
+
+    try { rec = new SpeechRec(); }
+    catch (e) { toast('음성 인식을 시작하지 못했습니다'); return; }
+
+    rec.lang = 'ko-KR';
+    rec.interimResults = true;
+    rec.continuous = true;
+    rec.maxAlternatives = 1;
+
+    rec.onstart = function () {
+      listening = true;
+      micUi(true);
+      // 말하는 동안 자판이 가리지 않게 내린다
+      if (inp && document.activeElement === inp) { try { inp.blur(); } catch (e) {} }
+    };
+    rec.onresult = onSpeechResult;
+    rec.onerror = onSpeechError;
+    rec.onend = onSpeechEnd;
+
+    listening = true;
+    micUi(true);
+    try {
+      rec.start();
+    } catch (e) {
+      listening = false;
+      micUi(false);
+      rec = null;
+      toast('음성 인식을 시작하지 못했습니다' + (e && e.message ? ' · ' + e.message : ''));
+    }
+  }
+
+  function stopListening() {
+    finishListening();
+  }
+
+  /* --- 🔊 답변 읽기 --- */
+
+  var ttsQueue = [];
+  var ttsBusy = false;
+  var ttsWatchdog = null;
+  var spokenIds = {};
+  var spokenCount = 0;
+  var koVoice = null;
+
+  function pickKoreanVoice() {
+    if (!TTS_OK) return null;
+    var vs = [];
+    try { vs = window.speechSynthesis.getVoices() || []; } catch (e) { vs = []; }
+    var best = null;
+    for (var i = 0; i < vs.length; i++) {
+      var l = String(vs[i].lang || '').toLowerCase();
+      if (l.indexOf('ko') !== 0) continue;
+      if (!best) best = vs[i];
+      if (/yuna|heami|sora|nara|korean|한국/i.test(vs[i].name || '')) best = vs[i];
+    }
+    return best;
+  }
+  function refreshVoice() { koVoice = pickKoreanVoice(); }
+  if (TTS_OK) {
+    refreshVoice();
+    if (typeof window.speechSynthesis.addEventListener === 'function') {
+      window.speechSynthesis.addEventListener('voiceschanged', refreshVoice);
+    } else {
+      window.speechSynthesis.onvoiceschanged = refreshVoice;
+    }
+  }
+
+  function cleanForSpeech(text) {
+    var s = String(text == null ? '' : text);
+    s = s.replace(/[\uD800-\uDFFF\uFE0F\u200D\u2600-\u27BF\u2B00-\u2BFF\u2190-\u21FF]/g, '');
+    s = s.replace(/@(all|김비서|제대리|김대리|클대리|챗대리)/g, '');
+    s = s.replace(/[#*_`>|]+/g, ' ');
+    s = s.replace(/\s+/g, ' ').trim();
+    if (s.length > 240) s = s.slice(0, 240) + '…';
+    return s;
+  }
+
+  function speakQueuePump() {
+    if (!TTS_OK || ttsBusy) return;
+    if (!db.settings.tts) { ttsQueue.length = 0; return; }
+    if (!ttsQueue.length) return;
+    var item = ttsQueue.shift();
+    var utter;
+    try { utter = new window.SpeechSynthesisUtterance(item.who + ', ' + item.text); }
+    catch (e) { return; }
+    utter.lang = 'ko-KR';
+    utter.rate = 1.0;
+    utter.pitch = 1.0;
+    if (koVoice) { try { utter.voice = koVoice; } catch (e) {} }
+
+    ttsBusy = true;
+    var done = false;
+    var finish = function () {
+      if (done) return;
+      done = true;
+      clearTimeout(ttsWatchdog);
+      ttsBusy = false;
+      setTimeout(speakQueuePump, 160);
+    };
+    utter.onend = finish;
+    utter.onerror = finish;
+    clearTimeout(ttsWatchdog);
+    ttsWatchdog = setTimeout(finish, 6000 + item.text.length * 90);
+    try { window.speechSynthesis.speak(utter); }
+    catch (e) { finish(); }
+  }
+
+  function enqueueSpeech(who, text) {
+    if (!TTS_OK || !db.settings.tts) return;
+    var clean = cleanForSpeech(text);
+    if (!clean) return;
+    while (ttsQueue.length >= 3) ttsQueue.shift();
+    ttsQueue.push({ who: who, text: clean });
+    speakQueuePump();
+  }
+
+  function announceMessage(m, room) {
+    if (!m || !TTS_OK || !db.settings.tts) return;
+    if (room !== currentRoom) return;
+    if (!m.who || m.who === '신회장' || !PEOPLE[m.who]) return;
+    var key = String(m.id || (m.who + '|' + m.ts));
+    if (spokenIds[key]) return;
+    if (spokenCount > 400) { spokenIds = {}; spokenCount = 0; }
+    spokenIds[key] = 1;
+    spokenCount++;
+    enqueueSpeech(m.who, m.text);
+  }
+
+  function stopSpeaking() {
+    ttsQueue.length = 0;
+    ttsBusy = false;
+    clearTimeout(ttsWatchdog);
+    try { window.speechSynthesis.cancel(); } catch (e) {}
+  }
+
+  function renderTtsToggle() {
+    var btn = $('#ttsToggle');
+    if (!btn) return;
+    var on = !!db.settings.tts;
+    btn.classList.toggle('is-on', on);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    btn.title = on ? '새 비서 답변을 소리로 읽는 중 (끄기)' : '새 비서 답변을 소리로 읽어줍니다';
+    var icon = $('#ttsIcon');
+    if (icon) icon.textContent = on ? '🔊' : '🔇';
+    var label = btn.querySelector('.tts-label');
+    if (label) label.textContent = on ? '음성 ON' : '음성 안내';
+  }
+
+  function toggleTts() {
+    if (!TTS_OK) {
+      toast('이 브라우저는 답변 읽기(음성 합성)를 지원하지 않습니다');
+      return;
+    }
+    db.settings.tts = !db.settings.tts;
+    if (!db.settings.tts) {
+      stopSpeaking();
+    } else {
+      // 사용자 손짓 안에서 한 번 재생해 모바일 브라우저의 오디오 잠금을 푼다
+      try {
+        var warm = new window.SpeechSynthesisUtterance('음성 안내를 켰습니다.');
+        warm.lang = 'ko-KR';
+        if (koVoice) warm.voice = koVoice;
+        window.speechSynthesis.speak(warm);
+      } catch (e) {}
+    }
+    renderTtsToggle();
+    saveNow();
+    toast(db.settings.tts ? '🔊 새 비서 답변을 소리로 읽습니다' : '🔇 음성 안내를 껐습니다');
+  }
+
   /* ---------------- 시드 데이터 ---------------- */
 
   function seedMessages() {
@@ -134,7 +429,9 @@
       sinceId: 0,
       customUrl: '',
       pollSec: 10,
-      demoReply: true
+      demoReply: true,
+      tts: false,             // 🔊 새 비서 답변 음성 안내 (기본 OFF)
+      voiceAutoSend: false    // 🎤 말이 끝나면 바로 전송 (기본 OFF — 확인 후 전송)
     };
   }
 
@@ -260,6 +557,7 @@
     }
     list.push(item);
     if (list.length > MAX_MSGS) list.splice(0, list.length - MAX_MSGS);
+    if (msg.remote || msg.demo) announceMessage(item, room);
     save();
     if (room === currentRoom && currentView === 'meeting') renderChat(true);
   }
@@ -437,7 +735,7 @@
       }, appear);
       setTimeout(function () {
         typingState[room] = typingState[room].filter(function (n) { return n !== who; });
-        addMessage(room, { who: who, text: composeReply(who, text, room) });
+        addMessage(room, { who: who, text: composeReply(who, text, room), demo: true });
         if (room === currentRoom && currentView === 'meeting') renderChat(true);
       }, finish);
     });
@@ -569,7 +867,7 @@
 
   /* --- 메시지 병합 (id 중복 제거 + 임시 항목 승격) --- */
 
-  function mergeMessages(rows) {
+  function mergeMessages(rows, silent) {
     var max = Number(db.settings.sbLastId) || 0;
     var added = 0;
 
@@ -594,6 +892,7 @@
         tmp.pending = false; tmp.failed = false;
       } else {
         list.push(item);
+        if (!silent) announceMessage(item, room);
       }
       list.sort(function (a, b) { return (a.ts || 0) - (b.ts || 0); });
       if (list.length > MAX_MSGS) list.splice(0, list.length - MAX_MSGS);
@@ -647,7 +946,7 @@
       if (row && row.id) {
         markMessage(tmpId, 'ok');
         db.rooms[room].messages = db.rooms[room].messages.filter(function (m) { return m.id !== tmpId; });
-        mergeMessages([row]);
+        mergeMessages([row], true);
       } else {
         markMessage(tmpId, 'ok');
       }
@@ -684,7 +983,7 @@
       body: { room: 'command', sender: '김비서', body: SB_SEED_TEXT }
     }).then(function (out) {
       var row = Array.isArray(out) ? out[0] : out;
-      if (row && row.id) mergeMessages([row]);
+      if (row && row.id) mergeMessages([row], true);
       return true;
     }).catch(function () {
       db.settings.sbSeeded = false;
@@ -705,7 +1004,7 @@
     ]).then(function (res) {
       var rows = (Array.isArray(res[0]) ? res[0] : []).slice().reverse();
       db.rooms = emptyRooms();
-      mergeMessages(rows);
+      mergeMessages(rows, true);
       db.tasks = (Array.isArray(res[1]) ? res[1] : []).map(taskFromRow);
       db.memos = (Array.isArray(res[2]) ? res[2] : []).map(memoFromRow);
       lastTasksSig = tasksSig();
@@ -1254,6 +1553,7 @@
 
   function switchView(view) {
     if (['meeting', 'tasks', 'staff', 'memo'].indexOf(view) < 0) view = 'meeting';
+    if (view !== 'meeting' && listening) finishListening(false);
     currentView = view;
     $$('#tabbar .tab').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-view') === view); });
     $$('.view').forEach(function (v) { v.classList.remove('active'); });
@@ -1528,6 +1828,7 @@
     renderTasks();
     renderStaff();
     renderMemos();
+    renderTtsToggle();
     updateStatus();
     $$('#tabbar .tab').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-view') === currentView); });
     $$('.view').forEach(function (v) { v.classList.toggle('active', v.id === 'view-' + currentView); });
@@ -1564,6 +1865,14 @@
     });
 
     $('#sendBtn').addEventListener('click', handleSend);
+    $('#micBtn').addEventListener('click', startListening);
+    $('#voiceStopBtn').addEventListener('click', function () { stopListening(); });
+    $('#voiceAutoSend').addEventListener('change', function (e) {
+      db.settings.voiceAutoSend = !!e.target.checked;
+      saveNow();
+      toast(db.settings.voiceAutoSend ? '말이 끝나면 바로 전송합니다' : '확인하고 전송합니다');
+    });
+    $('#ttsToggle').addEventListener('click', toggleTts);
 
     var input = $('#msgInput');
     input.addEventListener('input', autoGrow);
@@ -1689,6 +1998,9 @@
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape' && !$('#modal').hidden) closeSheet();
     });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && listening) stopListening();
+    });
 
     $('#backendSeg').addEventListener('click', function (e) {
       var b = e.target.closest('[data-backend]');
@@ -1712,6 +2024,8 @@
     document.addEventListener('visibilitychange', function () {
       if (document.hidden) {
         stopPolling();
+        stopSpeaking();
+        if (listening) finishListening(false);
       } else {
         resumeSync();
       }

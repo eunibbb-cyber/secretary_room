@@ -52,8 +52,13 @@
       </div>
 
       <div class="room-presence" id="roomPresence">
-        <span class="presence-main" id="presenceMain">🎯 지휘실 · ON 5명</span>
-        <span class="presence-sub" id="presenceSub">작업 지시·실행 보고</span>
+        <div class="presence-lines">
+          <span class="presence-main" id="presenceMain">🎯 지휘실 · ON 5명</span>
+          <span class="presence-sub" id="presenceSub">작업 지시·실행 보고</span>
+        </div>
+        <button class="tts-toggle" id="ttsToggle" type="button" aria-pressed="false" title="새 비서 답변을 소리로 읽어줍니다">
+          <span class="tts-icon" id="ttsIcon" aria-hidden="true">🔇</span><span class="tts-label">음성 안내</span>
+        </button>
       </div>
 
       <div class="chat-scroll" id="chatScroll">
@@ -68,8 +73,17 @@
         <div class="composer-row mentions-row">
           <div class="chip-row" id="mentionChips"></div>
         </div>
+        <div class="voice-bar" id="voiceBar" hidden>
+          <span class="voice-dot" aria-hidden="true"></span>
+          <span class="voice-text" id="voiceText">듣고 있어요…</span>
+          <label class="voice-auto" title="말이 끝나면 바로 전송합니다">
+            <input type="checkbox" id="voiceAutoSend"><span>자동 전송</span>
+          </label>
+          <button class="voice-stop" id="voiceStopBtn" type="button">중지</button>
+        </div>
         <div class="input-row">
           <textarea id="msgInput" rows="1" placeholder="대장님 지시를 입력하세요…" enterkeyhint="send" aria-label="메시지 입력"></textarea>
+          <button class="mic-btn" id="micBtn" type="button" aria-label="음성으로 말하기" aria-pressed="false" title="음성 입력">🎤</button>
           <button class="send-btn" id="sendBtn" type="button" aria-label="보내기">↑</button>
         </div>
       </div>
@@ -253,7 +267,7 @@
       <button class="link-btn" id="exportBtn" type="button">데이터 내보내기</button>
       <span class="sep">·</span>
       <button class="link-btn danger" id="resetBtn" type="button">전체 초기화</button>
-      <span class="version">v2.0</span>
+      <span class="version">v2.1</span>
     </div>
   </div>
 </div>

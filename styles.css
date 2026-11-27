@@ -267,11 +267,35 @@ button{cursor:pointer;-webkit-tap-highlight-color:transparent}
   padding:6px 2px 9px;
   border-bottom:1px dashed #EADFC9;
 }
+.presence-lines{display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap}
 .presence-main{
   font-size:11.5px;font-weight:700;color:#9A7F5C;
   letter-spacing:-.1px;
 }
 .presence-sub{font-size:10.5px;font-weight:600;color:var(--muted-2)}
+
+/* 음성 안내(답변 읽기) 토글 */
+.tts-toggle{
+  flex:0 0 auto;
+  display:inline-flex;align-items:center;gap:4px;
+  padding:5px 9px;
+  border-radius:999px;
+  border:1px solid var(--line);
+  background:rgba(255,253,248,.7);
+  color:#9C8A72;
+  font-size:10.5px;font-weight:700;
+  line-height:1;
+  transition:all .16s;
+}
+.tts-toggle:active{transform:scale(.96)}
+.tts-toggle .tts-icon{font-size:12px;line-height:1;filter:grayscale(.35);transition:filter .16s}
+.tts-toggle.is-on{
+  background:linear-gradient(145deg,#57B183,#3F9E6E);
+  border-color:transparent;
+  color:#F3FFF8;
+  box-shadow:0 4px 10px rgba(63,158,110,.28), inset 0 1px 0 rgba(255,255,255,.22);
+}
+.tts-toggle.is-on .tts-icon{filter:none}
 
 /* ---------- 회의실 : chat ---------- */
 .chat-scroll{
@@ -464,6 +488,68 @@ button{cursor:pointer;-webkit-tap-highlight-color:transparent}
 }
 .send-btn:active{transform:scale(.94);filter:brightness(.97)}
 .send-btn:disabled{opacity:.45;box-shadow:none}
+
+/* ---------- 음성 입력 (STT) ---------- */
+.mic-btn{
+  flex:0 0 40px;
+  width:40px;height:40px;
+  border:1px solid var(--line);
+  border-radius:50%;
+  background:#FFFEFB;
+  color:#8B7455;
+  font-size:16px;line-height:1;
+  display:grid;place-items:center;
+  transition:transform .14s, background .16s, border-color .16s, box-shadow .16s;
+}
+.mic-btn:active{transform:scale(.94)}
+.mic-btn.is-on{
+  background:linear-gradient(145deg,#E4655A,#C7443A);
+  border-color:transparent;
+  color:#fff;
+  animation:micPulse 1.5s ease-in-out infinite;
+}
+@keyframes micPulse{
+  0%,100%{box-shadow:0 0 0 0 rgba(199,68,58,.42)}
+  50%{box-shadow:0 0 0 9px rgba(199,68,58,.02)}
+}
+.voice-bar{
+  display:flex;align-items:center;gap:7px;
+  margin-top:7px;
+  padding:7px 9px 7px 11px;
+  border-radius:14px;
+  background:#FDF1EE;
+  border:1px solid #F2D9D2;
+  animation:msgIn .18s ease-out both;
+}
+.voice-bar[hidden]{display:none}
+.voice-dot{
+  flex:0 0 8px;width:8px;height:8px;border-radius:50%;
+  background:#C9563F;
+  animation:voiceBlink 1.1s ease-in-out infinite;
+}
+@keyframes voiceBlink{
+  0%,100%{opacity:1;transform:scale(1);box-shadow:0 0 0 0 rgba(201,86,63,.35)}
+  50%{opacity:.55;transform:scale(.82);box-shadow:0 0 0 5px rgba(201,86,63,0)}
+}
+.voice-text{font-size:11px;font-weight:800;color:#9A4331;letter-spacing:-.15px;white-space:nowrap}
+.voice-auto{
+  margin-left:auto;
+  display:inline-flex;align-items:center;gap:4px;
+  font-size:10.5px;font-weight:700;color:#9B6A54;
+  white-space:nowrap;cursor:pointer;
+}
+.voice-auto input{width:13px;height:13px;accent-color:#C7443A;margin:0}
+.voice-stop{
+  flex:0 0 auto;
+  padding:4px 9px;
+  border-radius:999px;
+  border:1px solid #EFCEC6;
+  background:#FFF8F6;
+  color:#9A4331;
+  font-size:10.5px;font-weight:800;
+  line-height:1.3;
+}
+.voice-stop:active{transform:scale(.96);background:#FBE9E4}
 
 /* ---------- 작업실 ---------- */
 .task-form,.memo-form{
