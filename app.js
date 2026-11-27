@@ -1177,7 +1177,11 @@
     var sum = $('#memoSummary');
     if (!wrap) return;
     var memos = db.memos.slice().sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); });
-    if (sum) sum.textContent = memos.length + '개 저장됨 · 이 기기에 보관';
+    if (sum) {
+      sum.textContent = memos.length + '개 저장됨 · ' +
+        (db.settings.backend === 'supabase' ? '실시간 서버 공유' :
+         db.settings.backend === 'local' ? '이 기기에 보관' : '서버 연결');
+    }
 
     if (!memos.length) {
       wrap.innerHTML = '<div class="empty-state">저장된 메모가 없습니다.<br>핵심 원칙·종목 기준선·수익화 메모를 카드로 남겨 두세요.</div>';
