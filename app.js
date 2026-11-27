@@ -1402,6 +1402,8 @@
   function saveSettings() {
     var f = readFormSettings();
     var prev = db.settings.backend;
+    var prevUrl = String(db.settings.sbUrl || '');
+    var prevKey = String(db.settings.sbKey || '');
     db.settings.backend = f.backend;
     db.settings.sbUrl = f.sbUrl;
     db.settings.sbKey = f.sbKey;
@@ -1413,8 +1415,9 @@
     db.settings.demoReply = f.demoReply;
     db.settings.sinceId = 0;
 
-    if (prev !== f.backend) {
-      // 백엔드가 바뀌면 캐시를 그 백엔드 기준으로 다시 구성한다.
+    var targetChanged = prev === 'supabase' && (prevUrl !== f.sbUrl || prevKey !== f.sbKey);
+    if (prev !== f.backend || targetChanged) {
+      // 백엔드/서버 주소가 바뀌면 캐시와 마지막 id를 그 서버 기준으로 다시 잡는다.
       db.rooms = emptyRooms();
       db.tasks = [];
       db.memos = [];
