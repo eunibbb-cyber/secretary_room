@@ -456,6 +456,7 @@ button{cursor:pointer;-webkit-tap-highlight-color:transparent}
 .input-row{display:flex;align-items:flex-end;gap:8px;margin-top:7px}
 #msgInput{
   flex:1 1 auto;
+  min-width:0;
   resize:none;
   min-height:42px;
   max-height:112px;
